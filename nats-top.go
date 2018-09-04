@@ -25,6 +25,8 @@ var (
 	sortBy      = flag.String("sort", "cid", "Value for which to sort by the connections.")
 	showVersion = flag.Bool("v", false, "Show nats-top version.")
 	lookupDNS   = flag.Bool("lookup", false, "Enable client addresses DNS lookup.")
+	displayUI   = flag.Bool("ui", true, "Enable the usage of a UI")
+	postMetrics = flag.Bool("telemetry", false, "Enable the posting of collected metrics as telemetry data")
 
 	// Secure options
 	httpsPort     = flag.Int("ms", 0, "The NATS server secure monitoring port.")
@@ -120,7 +122,9 @@ func main() {
 	defer ui.Close()
 
 	go engine.MonitorStats()
-	StartUI(engine)
+	if *displayUI {
+		StartUI(engine)
+	}
 }
 
 // clearScreen tries to ensure resetting original state of screen
