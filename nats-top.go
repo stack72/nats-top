@@ -2,12 +2,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	gnatsd "github.com/nats-io/gnatsd/server"
@@ -26,7 +29,6 @@ var (
 	showVersion = flag.Bool("v", false, "Show nats-top version.")
 	lookupDNS   = flag.Bool("lookup", false, "Enable client addresses DNS lookup.")
 	displayUI   = flag.Bool("ui", true, "Enable the usage of a UI")
-	postMetrics = flag.Bool("telemetry", false, "Enable the posting of collected metrics as telemetry data")
 
 	// Secure options
 	httpsPort     = flag.Int("ms", 0, "The NATS server secure monitoring port.")
@@ -34,6 +36,13 @@ var (
 	keyOpt        = flag.String("key", "", "Client private key in case NATS server using TLS")
 	caCertOpt     = flag.String("cacert", "", "Root CA cert")
 	skipVerifyOpt = flag.Bool("k", false, "Skip verifying server certificate")
+
+	// Telemetry options
+	postMetrics         = flag.Bool("telemetry", false, "Enable the posting of collected metrics as telemetry data")
+	circonusHost        = flag.String("circonus-host", "127.0.0.1", "The Circonus Host to push the metrics to")
+	circonusPort        = flag.Int("circonus-port", 2609, "The post of the Circonus Host to push the metrics to")
+	circonusInstanceId  = flag.String("circonus-instance-id", "", "The unique string ID fused to search for the check")
+	circonusDisplayName = flag.String("circonus-display-name", "", "The UI display name for the check")
 )
 
 const (
@@ -52,7 +61,7 @@ var (
 
 	usageHelp = `
 usage: nats-top [-s server] [-m http_port] [-ms https_port] [-n num_connections] [-d delay_secs] [-sort by]
-                [-cert FILE] [-key FILE ][-cacert FILE] [-k]
+                [-cert FILE] [-key FILE ][-cacert FILE] [-k] [-ui true|false]
 
 `
 	// cache for reducing DNS lookups in case enabled
@@ -70,6 +79,7 @@ func init() {
 }
 
 func main() {
+	fmt.Println("starting NATS-top...")
 
 	if *showVersion {
 		log.Printf("nats-top v%s", version)
@@ -101,6 +111,10 @@ func main() {
 		usage()
 	}
 
+	if *postMetrics {
+
+	}
+
 	// Smoke test to abort in case can't connect to server since the beginning.
 	_, err := engine.Request("/varz")
 	if err != nil {
@@ -115,15 +129,20 @@ func main() {
 	}
 	engine.SortOpt = sortOpt
 
-	err = ui.Init()
-	if err != nil {
-		panic(err)
-	}
-	defer ui.Close()
-
 	go engine.MonitorStats()
 	if *displayUI {
+		err = ui.Init()
+		if err != nil {
+			panic(err)
+		}
+		defer ui.Close()
+
 		StartUI(engine)
+	}
+	if *postMetrics {
+		fmt.Println("Starting metrics collection")
+		engine.SetupTelemetry(*circonusHost, *circonusPort, *circonusInstanceId, *circonusDisplayName)
+		PostTelemetry(engine)
 	}
 }
 
@@ -144,6 +163,34 @@ func cleanExit() {
 func exitWithError() {
 	ui.Close()
 	os.Exit(1)
+}
+
+func generateStats(
+	engine *top.Engine,
+	stats *top.Stats,
+) {
+	engine.PostMetricsTextValue("nats-cluster`server`version", stats.Varz.Info.Version)
+
+	engine.PostMetricsHistogramValue("nats-cluster`cpu`usage", stats.Varz.CPU)
+	engine.PostMetricsGaugeValue("nats-cluster`memory`usage", stats.Varz.Mem)
+	engine.PostMetricsTextValue("nats-cluster`uptime", stats.Varz.Uptime)
+	engine.PostMetricsGaugeValue("nats-cluster`number`connections", int64(stats.Connz.NumConns))
+
+	engine.PostMetricsGaugeValue("nats-cluster`in`messages", int64(stats.Varz.InMsgs))
+	engine.PostMetricsHistogramValue("nats-cluster`in`messages`rate", stats.Rates.InMsgsRate)
+	engine.PostMetricsGaugeValue("nats-cluster`in`bytes", int64(stats.Varz.InBytes))
+	engine.PostMetricsHistogramValue("nats-cluster`in`bytes`rate", stats.Rates.InBytesRate)
+
+	engine.PostMetricsGaugeValue("nats-cluster`out`messages", int64(stats.Varz.OutMsgs))
+	engine.PostMetricsHistogramValue("nats-cluster`out`messages`rate", stats.Rates.OutMsgsRate)
+	engine.PostMetricsGaugeValue("nats-cluster`out`bytes", int64(stats.Varz.OutBytes))
+	engine.PostMetricsHistogramValue("nats-cluster`out`bytes`rate", stats.Rates.OutBytesRate)
+
+	engine.PostMetricsGaugeValue("nats-cluster`slow`consumers", stats.Varz.SlowConsumers)
+
+	if stats.Connz != nil {
+		engine.PostMetricsGaugeValue("nats-cluster`subscriptions", int64(len(stats.Connz.Conns)))
+	}
 }
 
 // generateParagraph takes an options map and latest Stats
@@ -344,6 +391,31 @@ const (
 	TopViewMode ViewMode = iota
 	HelpViewMode
 )
+
+func PostTelemetry(engine *top.Engine) {
+	ctx, cancel := context.WithCancel(context.Background())
+	handleSignals(cancel)
+
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case receivedStats := <-engine.StatsCh:
+				stats := receivedStats
+
+				// Update top view text
+				generateStats(engine, stats)
+			}
+		}
+	}()
+
+	for {
+		<-ctx.Done()
+		fmt.Println("Exiting NATS-top")
+		return
+	}
+}
 
 // StartUI periodically refreshes the screen using recent data.
 func StartUI(engine *top.Engine) {
@@ -582,4 +654,25 @@ Press any key to continue...
 
 `
 	return text
+}
+
+func handleSignals(cancel context.CancelFunc) {
+	recvSig := make(chan os.Signal, 1)
+
+	signal.Notify(recvSig,
+		syscall.SIGINT,
+		syscall.SIGTERM,
+	)
+
+	go func() {
+		defer cancel()
+
+		sig := <-recvSig
+		switch sig {
+		case syscall.SIGINT:
+			fmt.Println("received SIGINT")
+		case syscall.SIGTERM:
+			fmt.Println("received SIGTERM")
+		}
+	}()
 }

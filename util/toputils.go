@@ -9,22 +9,24 @@ import (
 	"net/http"
 	"time"
 
+	gometrics "github.com/circonus-labs/circonus-gometrics"
 	gnatsd "github.com/nats-io/gnatsd/server"
 )
 
 const DisplaySubscriptions = 1
 
 type Engine struct {
-	Host        string
-	Port        int
-	HttpClient  *http.Client
-	Uri         string
-	Conns       int
-	SortOpt     gnatsd.SortOpt
-	Delay       int
-	DisplaySubs bool
-	StatsCh     chan *Stats
-	ShutdownCh  chan struct{}
+	Host            string
+	Port            int
+	HttpClient      *http.Client
+	Uri             string
+	Conns           int
+	SortOpt         gnatsd.SortOpt
+	Delay           int
+	DisplaySubs     bool
+	CirconusMetrics *gometrics.CirconusMetrics
+	StatsCh         chan *Stats
+	ShutdownCh      chan struct{}
 }
 
 func NewEngine(host string, port int, conns int, delay int) *Engine {
@@ -81,6 +83,7 @@ func (engine *Engine) Request(path string) (interface{}, error) {
 // MonitorStats is ran as a goroutine and takes options
 // which can modify how poll values then sends to channel.
 func (engine *Engine) MonitorStats() error {
+	fmt.Println("Monitoring stats...")
 	var pollTime time.Time
 
 	var inMsgsDelta int64
