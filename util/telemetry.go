@@ -1,7 +1,6 @@
 package toputils
 
 import (
-	"fmt"
 	"net"
 	"strconv"
 
@@ -34,7 +33,6 @@ func (engine *Engine) SetupTelemetry(host string, port int, instanceId, displayN
 }
 
 func (engine *Engine) PostMetricsGaugeValue(gaugeKey string, gaugeValue int64) {
-	fmt.Printf("Posting %s to circonus \n", gaugeKey)
 	if engine.CirconusMetrics == nil {
 		return
 	}
@@ -45,7 +43,6 @@ func (engine *Engine) PostMetricsGaugeValue(gaugeKey string, gaugeValue int64) {
 }
 
 func (engine *Engine) PostMetricsHistogramValue(histogramKey string, histogramValue float64) {
-	fmt.Printf("Posting %s to circonus \n", histogramKey)
 	if engine.CirconusMetrics == nil {
 		return
 	}
@@ -54,7 +51,6 @@ func (engine *Engine) PostMetricsHistogramValue(histogramKey string, histogramVa
 }
 
 func (engine *Engine) PostMetricsTextValue(key string, value string) {
-	fmt.Printf("Posting %s to circonus \n", key)
 	if engine.CirconusMetrics == nil {
 		return
 	}
