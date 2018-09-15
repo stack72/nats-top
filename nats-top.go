@@ -29,6 +29,7 @@ var (
 	showVersion = flag.Bool("v", false, "Show nats-top version.")
 	lookupDNS   = flag.Bool("lookup", false, "Enable client addresses DNS lookup.")
 	displayUI   = flag.Bool("ui", true, "Enable the usage of a UI")
+	startDelay  = flag.String("start-delay", "", "Add a delay before starting the application e.g. 10s")
 
 	// Secure options
 	httpsPort     = flag.Int("ms", 0, "The NATS server secure monitoring port.")
@@ -111,8 +112,12 @@ func main() {
 		usage()
 	}
 
-	if *postMetrics {
-
+	if *startDelay != "" {
+		duration, err := time.ParseDuration(*startDelay)
+		if err != nil {
+			log.Printf("nats-top: %s", err)
+		}
+		time.Sleep(duration)
 	}
 
 	// Smoke test to abort in case can't connect to server since the beginning.
